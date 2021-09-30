@@ -3,6 +3,7 @@ This repository provides codes and other materials for the subject Experimental 
 
 ### Getting started
 Please install the following software applications and packages before the first class:
+* Make sure [git](https://git-scm.com) is installed on your computer (if it isn't, you can download it [here](https://git-scm.com/downloads))
 * [R](https://www.r-project.org)
 * [RStudio Desktop](https://www.rstudio.com/products/rstudio/) (Open Source Edition)
 * [rstan](https://github.com/stan-dev/rstan/wiki/RStan-Getting-Started)
