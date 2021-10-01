@@ -19,5 +19,6 @@ Please complete the readings before each week's lecture.
 Please complete the tasks before each week's lecture.
 #### Week 10
 * Install the applications and packages listed in the Getting Started section above.
+* In RStudio, create a new project using version control (Git) based on this repository.
 * Run the R notebook stan_test.rmd (code/week10).
 * Design a laboratory expertiment to elicit a person's time (intertemporal) preferences, based on the article by Andersen et al. above.
