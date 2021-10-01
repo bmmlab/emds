@@ -19,5 +19,5 @@ Please complete the readings before each week's lecture.
 Please complete the tasks before each week's lecture.
 #### Week 10
 * Install the applications and packages listed in the Getting Started section above.
-* Run the R notebook test.rmd (code/week10).
+* Run the R notebook stan_test.rmd (code/week10).
 * Design an expertiment to elicit a person's time (intertemporal) preferences.
