@@ -1,0 +1,47 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Load required packages.
+
+```{r, include=FALSE}
+required_libraries <- c("rstan")
+lapply(required_libraries, require, character.only = TRUE)
+rm(list=ls())
+```
+
+Test rstan.
+
+```{r}
+# specify the stan model
+schools_model <- "data {
+  int<lower=0> J;         // number of schools 
+  real y[J];              // estimated treatment effects
+  real<lower=0> sigma[J]; // standard error of effect estimates 
+}
+parameters {
+  real mu;                // population treatment effect
+  real<lower=0> tau;      // standard deviation in treatment effects
+  vector[J] eta;          // unscaled deviation from mu by school
+}
+transformed parameters {
+  vector[J] theta = mu + tau * eta;        // school treatment effects
+}
+model {
+  target += normal_lpdf(eta | 0, 1);       // prior log-density
+  target += normal_lpdf(y | theta, sigma); // log-likelihood
+}"
+
+# specify the data
+schools_dat <- list(J = 8, 
+                    y = c(28,  8, -3,  7, -1,  1, 18, 12),
+                    sigma = c(15, 10, 16, 11,  9, 11, 10, 18))
+
+# compile and run the Stan model
+fit <- stan(model_code = schools_model, data = schools_dat)
+
+# print/plot estimates
+print(fit)
+plot(fit)
+```
