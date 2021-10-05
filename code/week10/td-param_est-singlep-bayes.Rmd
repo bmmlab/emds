@@ -1,0 +1,204 @@
+---
+title: "EMDS: Week 10 (parameter recovery)"
+output: html_notebook
+---
+
+This notebook contains code for simulation of a temporal discounting task and parameter recovery analysis for a single participant.
+
+```{r, include=FALSE}
+rm(list=ls())
+library("dplyr")
+library("ggplot2")
+library("ggpubr")
+library("rstan")
+options(mc.cores = 4)
+rstan_options(auto_write = TRUE)
+library("bridgesampling")
+library("bayesplot")
+```
+
+Load task parameters from CSV file (for 60 trials). The parameterisation is based on Anderson et al. (2008).
+
+```{r}
+tp <- read.csv('~/Downloads/td-params-andersonea.csv')
+tp <- tp[-1]
+num_trials <- dim(tp)[1]
+```
+
+Define some helper functions.
+
+```{r}
+# Discount function (exponential), assumes delay is in months
+disc <- function(d, r) {
+  if (d > 0){
+    util = (1 / (1 + exp(log(r)) / 12) ** (d))
+  } else {
+    util <- 1
+  }
+  util
+}
+
+# Function to compute discounted utility of amount a received after delay d 
+# (in months), assuming linear utility and discount rate r (p.a.)
+util <- function(a, d, r) {
+  util = disc(d, r) * a
+}
+
+# Logit (softmax) function
+softmax <- function(x, beta) {
+  min( max( 1 / (1 + exp(- exp(log(beta)) * x )), 10**(-15) ), 1 - 10**(-15) )
+}
+```
+
+Simulate responses of simple discounted utility model (assuming linear utility).
+
+```{r}
+# set participant parameters
+r = 0.3 # discount rate p.a 
+beta = 1 # softmax parameter (inverse of variance of logistic distribution)
+
+# vector for responses
+choices <- matrix(, num_trials, 3)
+
+# run through trials
+for (t in 1:num_trials) {
+  # compute utilities of the two options"
+  u0 <- util(tp[t,2], tp[t,1], r)
+  u1 <- util(tp[t,4], tp[t,3], r)
+  
+  # compute probability of choosing first option
+  p <- softmax(u1 - u0, beta)
+  
+  # convert probability into an actual choice
+  c <- rbinom(1, 1, p)
+  
+  # write simulated response to choices variable
+  choices[t, ] <- c(c, tp[t, 3], tp[t, 4])
+}
+
+choices <- data.frame(choices)
+colnames(choices) <- c("choice", "delay", "amount")
+```
+
+Plot choices by delay.
+
+```{r}
+p <- ggplot(choices, aes(amount, choice, colour = factor(delay))) +
+  geom_point() + facet_wrap(~ delay, ncol = 3, scales = "free") +
+  guides(colour = "none") +
+  theme_minimal()
+p
+```
+
+Let's estimate the discount rate using Bayesian estimation (using Stan). To do so, we need to build a Stan model. This model is saved in a separate file (in our case: td-exp-indiv.stan).
+
+Note that for 'simple' regression models, you can use packages 
+
+First, we have to compile the model.
+
+```{r}
+# Compile Stan model
+mod <- stan_model(file = '~/Downloads/td-exp-indiv.stan')
+```
+
+Next, we prepare the data for Stan.
+
+```{r}
+# arrange data
+dd_dat <- list(T = num_trials,
+               choices = choices[,1],
+               tp = tp)
+```
+
+Next, we estimate the posteriors using sampling.
+
+```{r}
+### Fit model
+fit <- sampling(mod, data = dd_dat, chains = 4, iter = 2000)
+```
+
+Next, we evaluate the simulations. We start by looking at the traceplots to examine convergence and mixing.
+
+```{r}
+traceplot(fit, pars = c("r", "beta"), inc_warmup = TRUE)
+```
+
+Next, we summarise the simulations (posterior estimations).
+
+```{r}
+plot(fit, pars = c("r", "beta"), show_density = TRUE, ci_level = 0.5, fill_color = "purple")
+fit
+```
+
+Extract parameter estimates (means of posteriors).
+
+```{r}
+param_est_summary <- summary(fit, pars = c("r", "beta"))$summary
+param_est_mean <- param_est_summary[, c("mean")]
+param_est_mean
+```
+
+```{r}
+# matrix for predictions
+pred_vs_actual <- matrix(, num_trials, 4)
+x_range <- seq(from = -5, to = 5, length.out = 100)
+
+# run through trials
+for (t in 1:num_trials) {
+  # compute utilities of the two options"
+  u0 <- util(tp[t,2], tp[t,1], param_est_mean[1])
+  u1 <- util(tp[t,4], tp[t,3], param_est_mean[1])
+
+  pred_vs_actual[t,1] <- u1 - u0
+  pred_vs_actual[t,2] <- choices[t,1]
+  pred_vs_actual[t,3] <- choices[t,2]
+  pred_vs_actual[t,4] <- softmax(u1 - u0, param_est_mean[2])
+}
+
+pred_vs_actual <- data.frame(pred_vs_actual)
+colnames(pred_vs_actual) <- c("delta_u", "choice", "delay", "p")
+
+p <- ggplot(pred_vs_actual, aes(delta_u, choice, colour = factor(delay))) +
+  geom_point() +
+  guides(colour = "none") +
+  geom_line(aes(y=p, group = 1))
+  theme_minimal()
+p
+```
+
+We could now do this again many times and compare actual parameters to estimates.
+
+Let's fit an alternative model (hyperbolic discounting).
+
+```{r}
+# Parameter estimate for hyperbolic model
+mod_h <- stan_model(file = '~/Downloads/td-hyp-indiv.stan')
+fit_h <- sampling(mod_h, data = dd_dat, chains = 4, iter = 2000)
+traceplot(fit, pars = c("r", "beta"), inc_warmup = TRUE)
+```
+
+Now we can do model comparison (based on marginal (log) likelihoods).
+
+```{r}
+# compute log marginal likelihood via bridge sampling for H0
+H0.bridge <- bridge_sampler(fit, silent = TRUE)
+print(H0.bridge)
+## Bridge sampling estimate of the log marginal likelihood: -31.45045
+## Estimate obtained in 5 iteration(s) via method "normal".
+
+H1.bridge <- bridge_sampler(fit_h, silent = TRUE)
+print(H1.bridge)
+## Bridge sampling estimate of the log marginal likelihood: -31.51184
+## Estimate obtained in 4 iteration(s) via method "normal".
+
+# compare the null model (exponential discounting) and the alternative model (hyperbolic discounting) based on the Bayes factor
+BF01 <- bf(H0.bridge, H1.bridge)
+print(BF01)
+## Estimated Bayes factor in favor of H0.bridge over H1.bridge: 1.06331
+
+# compute posterior model probabilities (assuming equal prior model probabilities)
+post <- post_prob(H0.bridge, H1.bridge)
+print(post)
+## H0.bridge H1.bridge 
+## 0.515343  0.484657 
+```

@@ -1,0 +1,285 @@
+---
+title: "EMDS: Week 10 (parameter recovery)"
+output: html_notebook
+---
+
+This notebook contains code for simulation of a temporal discounting task and parameter recovery analysis for a single participant.
+
+```{r, include=FALSE}
+rm(list=ls())
+library("dplyr")
+library("ggplot2")
+library("ggpubr")
+```
+
+Load task parameters from CSV file (for 60 trials). The parameterisation is based on Anderson et al. (2008).
+
+```{r}
+tp <- read.csv('td-params-andersonea.csv')
+tp <- tp[-1]
+num_trials <- dim(tp)[1]
+```
+
+Define some helper functions.
+
+```{r}
+# Discount function (exponential), assumes delay is in months
+disc <- function(d, r) {
+  if (d > 0){
+    util = (1 / (1 + exp(log(r)) / 12) ** (d))
+  } else {
+    util <- 1
+  }
+  util
+}
+
+# Function to compute discounted utility of amount a received after delay d 
+# (in months), assuming linear utility and discount rate r (p.a.)
+util <- function(a, d, r) {
+  util = disc(d, r) * a
+}
+
+# Logit (softmax) function
+softmax <- function(x, beta) {
+  min( max( 1 / (1 + exp(- exp(log(beta)) * x )), 10**(-15) ), 1 - 10**(-15) )
+}
+```
+
+Simulate responses of simple discounted utility model (assuming linear utility).
+
+```{r}
+# set participant parameters
+r = 0.3 # discount rate p.a 
+beta = 1 # softmax parameter (inverse of variance of logistic distribution)
+
+# vector for responses
+choices <- matrix(, num_trials, 3)
+
+# run through trials
+for (t in 1:num_trials) {
+  # compute utilities of the two options"
+  u0 <- util(tp[t,2], tp[t,1], r)
+  u1 <- util(tp[t,4], tp[t,3], r)
+  
+  # compute probability of choosing first option
+  p <- softmax(u1 - u0, beta)
+  
+  # convert probability into an actual choice
+  c <- rbinom(1, 1, p)
+  
+  # write simulated response to choices variable
+  choices[t, ] <- c(c, tp[t, 3], tp[t, 4])
+}
+
+choices <- data.frame(choices)
+colnames(choices) <- c("choice", "delay", "amount")
+```
+
+Plot choices by delay.
+
+```{r}
+p <- ggplot(choices, aes(amount, choice, colour = factor(delay))) +
+  geom_point() + facet_wrap(~ delay, ncol = 3, scales = "free") +
+  guides(colour = "none") +
+  theme_minimal()
+p
+```
+
+Let's estimate the discount rate using maximum likelihood estimation. First, we need to define the likelihood function.
+
+```{r}
+neg_ll <- function(params, choices, tp) {
+  
+  neg_ll = 0
+  
+  for (t in 1:num_trials) {
+    # compute utilities of both options
+    u0 <- util(tp[t,2], tp[t,1], params[1])
+    u1 <- util(tp[t,4], tp[t,3], params[1])
+  
+    # compute probability of choosing first option
+    p <- softmax(u1 - u0, params[2])
+    
+    # compute log-likelihood
+    neg_ll = neg_ll - log(p)**choices[t,1] - log(1-p)**(1-choices[t,1])
+  }
+  
+  neg_ll
+}
+```
+
+Let's plot the log-likelihood function.
+
+```{r}
+# compute ll
+ll_sim <- matrix(, 100 * 100, 3)
+
+r_range <- seq(from = 0, to = 1, length.out = 100)
+beta_range <- seq(from = 0, to = 5, length.out = 100)
+
+row <- 0
+for (i in 1:length(r_range)) {
+  for (j in 1:length(beta_range)) {
+    ll_sim[row, 1] <- r_range[i]
+    ll_sim[row, 2] <- beta_range[j]
+    ll_sim[row, 3] <- neg_ll(c(r_range[i], beta_range[j]), choices, tp)
+    row <- row + 1
+  }
+}
+
+ll_sim <- data.frame(ll_sim)
+colnames(ll_sim) <- c("r", "beta", "neg_ll")
+
+# plot neg-LL surface
+v <- ggplot(ll_sim, aes(r, beta, z = -neg_ll))
+v + geom_contour(binwidth = 2) 
+```
+Now let's use optimisation to compute the MLE estimate of r and beta.
+
+```{r}
+theta_mle <- optim(c(0.5, 1), neg_ll, choices = choices, tp = tp)
+theta_mle
+```
+
+So that looks good (or does it?). Let's assess the goodness of fit by plotting actual choices in utility space.
+
+```{r}
+# matrix for predictions
+pred_vs_actual <- matrix(, num_trials, 4)
+x_range <- seq(from = -5, to = 5, length.out = 100)
+
+# run through trials
+for (t in 1:num_trials) {
+  # compute utilities of the two options"
+  u0 <- util(tp[t,2], tp[t,1], theta_mle$par[1])
+  u1 <- util(tp[t,4], tp[t,3], theta_mle$par[1])
+
+  pred_vs_actual[t,1] <- u1 - u0
+  pred_vs_actual[t,2] <- choices[t,1]
+  pred_vs_actual[t,3] <- choices[t,2]
+  pred_vs_actual[t,4] <- softmax(u1 - u0, theta_mle$par[2])
+}
+
+pred_vs_actual <- data.frame(pred_vs_actual)
+colnames(pred_vs_actual) <- c("delta_u", "choice", "delay", "p")
+
+p <- ggplot(pred_vs_actual, aes(delta_u, choice, colour = factor(delay))) +
+  geom_point() +
+  guides(colour = "none") +
+  geom_line(aes(y=p, group = 1))
+  theme_minimal()
+p
+```
+
+Let's do this 100 times and compare actual parameters to estimates.
+
+```{r}
+N = 100
+r_est <- matrix(, N, 2)
+beta_est <- matrix(, N, 2)
+
+for (n in 1:N) {
+  # set participant parameters
+  r = rnorm(1, 0.3, 0.03) # discount rate p.a 
+  beta = rnorm(1, 1, 0.1) # softmax parameter (inverse of variance of logistic distribution)
+  
+  # vector for responses
+  choices <- matrix(, num_trials, 3)
+  
+  # run through trials
+  for (t in 1:num_trials) {
+    # compute utilities of the two options"
+    u0 <- util(tp[t,2], tp[t,1], r)
+    u1 <- util(tp[t,4], tp[t,3], r)
+    
+    # compute probability of choosing first option
+    p <- softmax(u1 - u0, beta)
+    
+    # convert probability into an actual choice
+    c <- rbinom(1, 1, p)
+    
+    # write simulated response to choices variable
+    choices[t, ] <- c(c, tp[t, 3], tp[t, 4])
+  }
+  
+  choices <- data.frame(choices)
+  colnames(choices) <- c("choice", "delay", "amount")
+  
+  theta_mle <- optim(c(0.5, 1), neg_ll, choices = choices, tp = tp)
+  r_est[n,1] <- r
+  r_est[n,2] <- theta_mle$par[1]
+  beta_est[n,1] <- beta
+  beta_est[n,2] <- theta_mle$par[2]
+}
+
+r_est <- data.frame(r_est)
+colnames(r_est) <- c("actual", "estimate")
+beta_est <- data.frame(beta_est)
+colnames(beta_est) <- c("actual", "estimate")
+
+p1 <- ggplot(r_est, aes(actual, estimate)) +
+  geom_point(color='darkblue') +
+  # guides(colour = "none") +
+  geom_rug() +
+  theme_minimal()
+p1
+
+p2 <- ggplot(beta_est, aes(actual, estimate)) +
+  geom_point(color='darkblue') +
+  # guides(colour = "none") +
+  theme_minimal()
+p2
+```
+
+Now let's examine how good parameter recoverability is for a range of model parameters (r in [0,1] and beta in [0,10]). We will construct a grid of 50 values of r from the interval [0,1] and 50 values from the interval [0,10] and compute parameter recoverability for each of the 50x50 gridpoints (using 10 simulations per grid point).
+
+```{r}
+N = 10
+r_range <- seq(from = 0, to = 1, length.out = 50)
+beta_range <- seq(from = 0, to = 10, length.out = 50)
+
+# EXERCISE!
+
+```
+
+Let's fit an alternative model.
+
+```{r}
+# Function to compute discounted utility of amount a received after delay d 
+# (in months), assuming linear utility and hyperbolic discounting with discount rate r (p.a.)
+util_h <- function(a, d, r) {
+  util = a / (1 + exp(log(r)) * d / 12)
+}
+
+# Negative LL for hyperbolic model
+neg_ll_h <- function(params, choices, tp) {
+  
+  neg_ll = 0
+  
+  for (t in 1:num_trials) {
+    # compute utilities of both options
+    u0 <- util_h(tp[t,2], tp[t,1], params[1])
+    u1 <- util_h(tp[t,4], tp[t,3], params[1])
+  
+    # compute probability of choosing first option
+    p <- softmax(u1 - u0, params[2])
+    
+    # compute log-likelihood
+    neg_ll = neg_ll - log(p)**choices[t,1] - log(1-p)**(1-choices[t,1])
+  }
+  
+  neg_ll
+}
+
+# Parameter estimate for hyperbolic model
+theta_mle_h <- optim(c(0.5, 1), neg_ll_h, choices = choices, tp = tp)
+theta_mle_h
+```
+
+Let's compare the two models using BIC.
+
+```{r}
+BIC = -2 * -theta_mle$value + 2 * log(num_trials)
+BIC_h = -2 * -theta_mle_h$value + 2 * log(num_trials)
+print(c(BIC, BIC_h))
+```
