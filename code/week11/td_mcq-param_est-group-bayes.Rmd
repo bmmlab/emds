@@ -1,0 +1,322 @@
+---
+title: "EMDS: Week 11 (parameter recovery)"
+output: html_notebook
+---
+
+This notebook contains code for simulation of a temporal discounting task and parameter recovery analysis for a single participant.
+
+```{r, include=FALSE}
+rm(list=ls())
+library("dplyr")
+library("ggplot2")
+library("ggpubr")
+library("rstan")
+options(mc.cores = 4)
+rstan_options(auto_write = TRUE)
+# library("bridgesampling")
+# library("bayesplot")
+```
+
+Load task parameters from CSV file (for 40 trials). The parameterisation is based on the MCQ questionnaire.
+
+```{r}
+# Kirby's MCQ data (rounded version)
+V_now_r =
+  c(54.00, 55.00, 19.00, 31.00, 14.00, 47.00, 15.00, 25.00, 78.00, 40.00,
+    11.00, 67.00, 34.00, 27.00, 69.00, 49.00, 80.00, 24.00, 33.00, 28.00,
+    34.00, 25.00, 41.00, 54.00, 54.00, 22.00, 20.00, 52.00, 36.00, 21.00)
+V_later_r =
+  c(55.00, 75.00, 25.00, 85.00, 25.00, 50.00, 35.00, 60.00, 80.00, 55.00,
+    30.00, 75.00, 35.00, 50.00, 85.00, 60.00, 85.00, 35.00, 80.00, 30.00,
+    50.00, 30.00, 75.00, 60.00, 80.00, 25.00, 55.00, 80.00, 55.00, 30.00)
+
+# Delay for both versions
+Delay_later =
+  c(117,  61,  53,   7,  19, 160,  13,  14, 162,  62,
+    7, 119, 186,  21,  91,  89, 157,  29,  14, 179,
+    30,  80,  20, 111,  30, 136,   7,  49,  48,  39)
+Delay_sooner = 
+  rep(0, times=length(Delay_later))
+
+tp <- matrix(, length(V_now_r), 4)
+tp[, 1] <- V_now_r
+tp[, 2] <- rep(0, times=length(Delay_later))
+tp[, 3] <- V_later_r
+tp[, 4] <- Delay_later
+tp <- data.frame(tp)
+colnames(tp) <- c("SS_amount", "SS_delay", "LL_amount", "LL_delay")
+write.csv(tp, 'td-params-mcq.csv', row.names = FALSE)
+```
+
+```{r}
+tp <- read.csv('td-params-mcq.csv')
+# tp <- tp %>% slice(rep(1:n(), each = 2))
+num_trials <- dim(tp)[1]
+```
+
+Define some helper functions.
+
+```{r}
+# Discount function (exponential), assumes delay is in months
+disc <- function(d, r) {
+  if (d > 0){
+    util = (1 / (1 + exp(log(r)) / 365) ** (d))
+  } else {
+    util <- 1
+  }
+  util
+}
+
+# Function to compute discounted utility of amount a received after delay d 
+# (in months), assuming linear utility and discount rate r (p.a.)
+util <- function(a, d, r) {
+  util = disc(d, r) * a
+}
+
+# Logit (softmax) function
+softmax <- function(x, beta) {
+  min( max( 1 / (1 + exp(- exp(log(beta)) * x )), 10**(-15) ), 1 - 10**(-15) )
+}
+```
+
+Simulate responses of simple discounted utility model (assuming linear utility).
+
+```{r}
+# set participant parameters
+r = 0.4 # discount rate p.a 
+beta = 0.5 # softmax parameter (inverse of variance of logistic distribution)
+
+# vector for responses
+choices <- matrix(, num_trials, 3)
+
+# run through trials
+for (t in 1:num_trials) {
+  # compute utilities of the two options"
+  u0 <- util(tp[t,1], tp[t,2], r)
+  u1 <- util(tp[t,3], tp[t,4], r)
+  
+  # compute probability of choosing first option
+  p <- softmax(u1 - u0, beta)
+  
+  # convert probability into an actual choice
+  c <- rbinom(1, 1, p)
+  
+  # write simulated response to choices variable
+  choices[t, ] <- c(c, tp[t, 4], tp[t, 3]-tp[t,1])
+}
+
+choices <- data.frame(choices)
+colnames(choices) <- c("choice", "delay", "amount")
+```
+
+Let's estimate the discount rate using Bayesian estimation (using Stan). To do so, we need to build a Stan model. This model is saved in a separate file (in our case: td-exp-indiv.stan).
+
+First, we have to compile the model.
+
+```{r}
+# Compile Stan model
+mod <- stan_model(file = 'td-exp-indiv.stan')
+```
+
+Next, we prepare the data for Stan.
+
+```{r}
+# arrange data
+dd_dat <- list(T = num_trials,
+               choices = choices[,1],
+               tp = tp)
+```
+
+Next, we estimate the posteriors using sampling.
+
+```{r}
+### Fit model
+fit <- sampling(mod, data = dd_dat, chains = 4, iter = 2000)
+```
+
+Next, we evaluate the simulations. We start by looking at the traceplots to examine convergence and mixing.
+
+```{r}
+traceplot(fit, pars = c("r", "beta"), inc_warmup = TRUE)
+```
+
+Next, we summarise the simulations (posterior estimations).
+
+```{r}
+plot(fit, pars = c("r", "beta"), show_density = TRUE, ci_level = 0.95, fill_color = "purple")
+fit
+```
+
+Extract parameter estimates (means of posteriors).
+
+```{r}
+param_est_summary <- summary(fit, pars = c("r", "beta"))$summary
+param_est_mean <- param_est_summary[, c("mean")]
+param_est_mean
+```
+
+```{r}
+# matrix for predictions
+pred_vs_actual <- matrix(, num_trials, 4)
+x_range <- seq(from = -5, to = 5, length.out = 100)
+
+# run through trials
+for (t in 1:num_trials) {
+  # compute utilities of the two options"
+  u0 <- util(tp[t,1], tp[t,2], param_est_mean[1])
+  u1 <- util(tp[t,3], tp[t,4], param_est_mean[1])
+
+  pred_vs_actual[t,1] <- u1 - u0
+  pred_vs_actual[t,2] <- choices[t,1]
+  pred_vs_actual[t,3] <- choices[t,2]
+  pred_vs_actual[t,4] <- softmax(u1 - u0, param_est_mean[2])
+}
+
+pred_vs_actual <- data.frame(pred_vs_actual)
+colnames(pred_vs_actual) <- c("delta_u", "choice", "delay", "p")
+
+p <- ggplot(pred_vs_actual, aes(delta_u, choice, colour = factor(delay))) +
+  geom_point() +
+  guides(colour = "none") +
+  geom_line(aes(y=p, group = 1))
+  theme_minimal()
+p
+```
+
+We could now do this again many times and compare actual parameters to estimates.
+
+Instead, we'll look at modelling a group of participants. We'll again use simulation first to test our model.
+
+```{r}
+# set task parameters
+N = 20
+
+# set hyperpriors
+mu_pr = rnorm(2, mean = 0, sd = 1)
+sigma = rnorm(2, mean = 0, sd = 0.5)
+
+# set priors
+r_pr = rnorm(N, mean = 0, sd = 0.5)
+beta_pr = rnorm(N, mean = 0, sd = 1)
+
+# set participant level parameters
+r = rep(0, N)
+beta = rep(0, N)
+
+for (p in 1:N) {
+  r[p] = pnorm(mu_pr[1] + sigma[1] * r_pr[p]) * 2
+  beta[p] = pnorm(mu_pr[2] + sigma[2] * beta_pr[p]) * 5
+}
+```
+
+Simulate data
+
+```{r}
+# vector for responses
+choice <- matrix(, N, num_trials)
+
+# rearrange trial parameters for Stan
+TP <- list()
+Tpart <- rep(0, N)
+
+# run through participants
+for (n in 1:N) {
+  # run through trials
+  for (t in 1:num_trials) {
+    # compute utilities of the two options"
+    u0 <- util(tp[t,1], tp[t,2], r[n])
+    u1 <- util(tp[t,3], tp[t,4], r[n])
+    
+    # compute probability of choosing first option
+    p <- softmax(u1 - u0, beta[n])
+    
+    # convert probability into an actual choice
+    c <- rbinom(1, 1, p)
+    
+    # write simulated response to choices variable
+    choice[n, t] <- c
+    Tpart[n] = dim(tp)[1]
+    TP[[n]] = as.matrix(tp)
+  }
+}
+```
+
+First, let's estimate a so-called pooled model.
+
+```{r}
+choices <- rep(-1, N * num_trials)
+tpg <- matrix(, N * num_trials, 4)
+
+for (n in 1:N) {
+  choices[((n-1)*num_trials+1):(n*num_trials)] <- choice[n, ]
+  tpg[((n-1)*num_trials+1):(n*num_trials), ] <- TP[[n]]
+}
+```
+
+We recompile the Stan model (for one participant).
+
+```{r}
+# Compile Stan model
+mod <- stan_model(file = 'td-exp-indiv.stan')
+```
+
+Next, we prepare the data for Stan.
+
+```{r}
+# arrange data
+dd_dat <- list(T = N * num_trials,
+               choices = choices,
+               tp = tpg)
+```
+
+Next, we estimate the posteriors using sampling.
+
+```{r}
+### Fit model
+fit <- sampling(mod, data = dd_dat, chains = 4, iter = 2000)
+```
+
+Let's examine the traceplots.
+
+```{r}
+traceplot(fit, pars = c("r", "beta"), inc_warmup = TRUE)
+```
+
+```{r}
+plot(fit, pars = c("r", "beta"), show_density = TRUE, ci_level = 0.95, fill_color = "purple")
+fit
+```
+Extract parameter estimates (means of posteriors).
+
+```{r}
+param_est_summary <- summary(fit, pars = c("r", "beta"))$summary
+param_est_mean <- param_est_summary[, c("mean")]
+param_est_mean
+```
+
+Now let's estimate a hierarchical model.
+
+```{r}
+stan_mod <- stan_model(file = 'td-hierarch-model.stan')
+  
+sim_dat <- list(N = N,
+                T = dim(tp)[1],
+                Tpart = Tpart,
+                choice = choice,
+                TP = TP)
+
+fit03 <- sampling(stan_mod, data = sim_dat, chains = 4, iter = 5000)
+```
+
+```{r}
+traceplot(fit03, pars = c("r", "beta"), inc_warmup = FALSE)
+
+fit_summary <- summary(fit03)
+fit_summary
+
+plot(fit03, pars = c("r", "beta"), show_density = TRUE, ci_level = 0.95, fill_color = "purple")
+plot(fit03, pars = c("r"), show_density = TRUE, ci_level = 0.95, fill_color = "purple")
+
+mean(extract(fit03, pars = "r")[[1]])
+quantile(extract(fit03, pars = "r")[[1]], probs = c(0.1, 0.9))
+```

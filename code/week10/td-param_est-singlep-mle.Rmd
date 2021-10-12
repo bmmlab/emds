@@ -231,7 +231,7 @@ p2 <- ggplot(beta_est, aes(actual, estimate)) +
 p2
 ```
 
-Now let's examine how good parameter recoverability is for a range of model parameters (r in [0,1] and beta in [0,10]). We will construct a grid of 50 values of r from the interval [0,1] and 50 values from the interval [0,10] and compute parameter recoverability for each of the 50x50 gridpoints (using 10 simulations per grid point). What is a good criterion for parameter recoveriability for this kind of analysis? (Try to exploit parallelisation in your computations.)
+Now let's examine how good parameter recoverability is for a range of model parameters (r in [0,1] and beta in [0,10]). We will construct a grid of 50 values of r from the interval [0,1] and 50 values from the interval [0,10] and compute parameter recoverability for each of the 50x50 gridpoints (using 10 simulations per grid point). What is a good criterion for parameter recoverability for this kind of analysis? (Try to exploit parallelisation in your computations.)
 
 ```{r}
 N = 10

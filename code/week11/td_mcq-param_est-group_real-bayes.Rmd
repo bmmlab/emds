@@ -1,0 +1,120 @@
+---
+title: "EMDS: Week 11 (fitting real data)"
+output: html_notebook
+---
+
+This notebook contains code for simulation of a temporal discounting task and parameter recovery analysis for a single participant.
+
+```{r, include=FALSE}
+rm(list=ls())
+library("dplyr")
+library("ggplot2")
+library("ggpubr")
+library("rstan")
+options(mc.cores = 4)
+rstan_options(auto_write = TRUE)
+# library("bridgesampling")
+# library("bayesplot")
+```
+
+First, let's load our data.
+
+```{r}
+resp <- read.csv('td-responses.csv', index = FALSE)
+resp <- resp[,-1]
+# resp <- resp %>% filter(participant_id > 0)
+```
+
+First, let's estimate a so-called pooled model.
+
+```{r}
+choices <- resp[, 'response']
+tp <- resp[, 5:8]
+```
+
+We recompile the Stan model (assuming all data are from a single ('representative') participant).
+
+```{r}
+# Compile Stan model
+mod <- stan_model(file = 'td-exp-indiv.stan')
+```
+
+Next, we prepare the data for Stan.
+
+```{r}
+# arrange data
+dd_dat <- list(T = length(choices),
+               choices = choices,
+               tp = tp)
+```
+
+Next, we estimate the posteriors using sampling.
+
+```{r}
+### Fit model
+fit <- sampling(mod, data = dd_dat, chains = 4, iter = 2000)
+```
+
+Let's examine the traceplots.
+
+```{r}
+traceplot(fit, pars = c("r", "beta"), inc_warmup = TRUE)
+```
+
+```{r}
+plot(fit, pars = c("r", "beta"), show_density = TRUE, ci_level = 0.95, fill_color = "purple")
+fit
+```
+Extract parameter estimates (means of posteriors).
+
+```{r}
+param_est_summary <- summary(fit, pars = c("r", "beta"))$summary
+param_est_mean <- param_est_summary[, c("mean")]
+param_est_mean
+```
+
+Now let's estimate a hierarchical model.
+
+First, we need to arrange the data.
+
+```{r}
+pIDs <- unique(resp['participant_id'])
+choices <- matrix(, nrow = length(pIDs), ncol = 30)
+Tpart <- rep(0, length(pIDs))
+
+for (i in 1:length(pIDs)) {
+  p <- pIDs[i]
+  p_data <- resp %>% filter(participant_id == p)
+  Tpart[i] <- dim(p_data)[1]
+  choices[i, 1:dim(p_data)[1]] <- p_data[, 'response'] 
+  tp <- matrix(0, nrow = 30, ncol = 4)
+  tp[1:dim(p_data)[1], 1:4] <- as.matrix(p_data[, 5:8])
+  TP[[i]] <- tp
+}
+```
+
+```{r}
+stan_mod <- stan_model(file = 'td-hierarch-model.stan')
+  
+sim_dat <- list(N = length(pIDs),
+                T = 30,
+                Tpart = Tpart,
+                choice = choice,
+                TP = TP)
+
+fit03 <- sampling(stan_mod, data = sim_dat, chains = 4, iter = 5000)
+```
+
+
+```{r}
+traceplot(fit03, pars = c("r", "beta"), inc_warmup = FALSE)
+
+fit_summary <- summary(fit03)
+fit_summary
+
+plot(fit03, pars = c("r", "beta"), show_density = TRUE, ci_level = 0.95, fill_color = "purple")
+plot(fit03, pars = c("beta"), show_density = TRUE, ci_level = 0.95, fill_color = "purple")
+
+mean(extract(fit03, pars = "beta")[[1]])
+quantile(extract(fit03, pars = "r")[[1]], probs = c(0.1, 0.9))
+```

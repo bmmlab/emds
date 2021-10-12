@@ -20,7 +20,7 @@ library("bayesplot")
 Load task parameters from CSV file (for 60 trials). The parameterisation is based on Anderson et al. (2008).
 
 ```{r}
-tp <- read.csv('~/Downloads/td-params-andersonea.csv')
+tp <- read.csv('td-params-andersonea.csv')
 tp <- tp[-1]
 num_trials <- dim(tp)[1]
 ```
@@ -98,7 +98,7 @@ First, we have to compile the model.
 
 ```{r}
 # Compile Stan model
-mod <- stan_model(file = '~/Downloads/td-exp-indiv.stan')
+mod <- stan_model(file = 'td-exp-indiv.stan')
 ```
 
 Next, we prepare the data for Stan.
@@ -126,7 +126,7 @@ traceplot(fit, pars = c("r", "beta"), inc_warmup = TRUE)
 Next, we summarise the simulations (posterior estimations).
 
 ```{r}
-plot(fit, pars = c("r", "beta"), show_density = TRUE, ci_level = 0.5, fill_color = "purple")
+plot(fit, pars = c("r", "beta"), show_density = TRUE, ci_level = 0.95, fill_color = "purple")
 fit
 ```
 
@@ -172,7 +172,7 @@ Let's fit an alternative model (hyperbolic discounting).
 
 ```{r}
 # Parameter estimate for hyperbolic model
-mod_h <- stan_model(file = '~/Downloads/td-hyp-indiv.stan')
+mod_h <- stan_model(file = 'td-hyp-indiv.stan')
 fit_h <- sampling(mod_h, data = dd_dat, chains = 4, iter = 2000)
 traceplot(fit, pars = c("r", "beta"), inc_warmup = TRUE)
 ```
